@@ -118,7 +118,7 @@ import { IAgentHostCustomizationService } from '../agentSessions/agentHost/agent
 import { EmbeddedExtensionToolsDetail } from './embeddedExtensionToolsDetail.js';
 import { ICustomizationHarnessService, type ICustomizationSourceFolder } from '../../common/customizationHarnessService.js';
 import { ChatConfiguration } from '../../common/constants.js';
-import { AICustomizationWelcomePage, type ICustomizationMarketplaceOrigin, type ICustomizationMigrationCategorySummary } from './aiCustomizationWelcomePage.js';
+import { AICustomizationWelcomePage, type ICustomizationMarketplaceOrigin, type ICustomizationMigrationCategorySummary, type IInstalledCustomizationTarget } from './aiCustomizationWelcomePage.js';
 import { ICustomizationMarketplaceInstallService } from '../../common/customizationMarketplaceInstallService.js';
 import { type CustomizationMigrationTargetFolders, type IMigratedCustomizationsWithFailureReasonsResult, migrateCustomizations, resolveWorkspaceMigrationTargetFolder } from './customizationMigration.js';
 import { CUSTOMIZATION_MIGRATION_CATEGORIES, CustomizationMigrationCategoryId, getCustomizationMigrationCategory, homepageMigrationCategories, type ICustomizationMigrationBanner, type ICustomizationMigrationCandidatePresentation, type ICustomizationMigrationCategory } from './customizationMigrationCategories.js';
@@ -553,6 +553,7 @@ export class AICustomizationManagementEditor extends EditorPane {
 	private sectionsList!: WorkbenchList<ISectionItem>;
 	private contentContainer!: HTMLElement;
 	private listWidget!: AICustomizationListWidget;
+	private listWidgetSectionLoad: Promise<void> = Promise.resolve();
 	private mcpListWidget: McpListWidget | undefined;
 	private pluginListWidget: PluginListWidget | undefined;
 	private modelsWidget: ChatModelsWidget | undefined;
@@ -1198,19 +1199,7 @@ export class AICustomizationManagementEditor extends EditorPane {
 			{
 				selectSection: (section) => this.selectSection(section),
 				selectSectionWithMarketplace: (section) => this.selectSection(section, { showMarketplace: true }),
-				openInstalled: target => {
-					const origin: CustomizationDetailBaseOrigin = { kind: 'discover' };
-					this.selectSection(target.section);
-					if (target.promptDetail) {
-						void this.openCustomizationItem(target.promptDetail, origin);
-					} else if (target.pluginDetail) {
-						void this.showEmbeddedPluginDetail(target.pluginDetail, origin);
-					} else if (target.mcpDetail) {
-						void this.showEmbeddedMcpDetail(target.mcpDetail, origin);
-					} else if (target.uri) {
-						void this.revealCustomizationByUri(target.uri);
-					}
-				},
+				openInstalled: target => void this.revealInstalledCustomization(target),
 				openMarketplaceItem: (resource, origin) => {
 					this.showMarketplaceDetail(resource, origin);
 				},
@@ -3615,8 +3604,9 @@ export class AICustomizationManagementEditor extends EditorPane {
 		this.updateContentVisibility();
 
 		// Load items for the new section (only for prompts-based sections)
+		this.listWidgetSectionLoad = Promise.resolve();
 		if (this.isPromptsSection(section)) {
-			void this.listWidget.setSection(section);
+			this.listWidgetSectionLoad = this.listWidget.setSection(section);
 		}
 
 		// Re-layout after visibility change so the newly-visible widget can
@@ -3702,6 +3692,12 @@ export class AICustomizationManagementEditor extends EditorPane {
 			const welcomeVisible = isWelcome && !isEditorMode && !isMigrationMode && !isDetailMode;
 			this.welcomePage.container.style.display = welcomeVisible ? '' : 'none';
 			this.welcomePage.setVisible(this.isVisible() && welcomeVisible);
+			this.homeButton?.classList.toggle('selected', welcomeVisible);
+			if (welcomeVisible) {
+				this.homeButton?.setAttribute('aria-current', 'page');
+			} else {
+				this.homeButton?.removeAttribute('aria-current');
+			}
 		}
 		if (this.promptsContentContainer) {
 			this.promptsContentContainer.style.display = !isEditorMode && !isMigrationMode && !isDetailMode && isPromptsSection ? '' : 'none';
@@ -4252,6 +4248,26 @@ export class AICustomizationManagementEditor extends EditorPane {
 			}
 			if (attempt === 0) {
 				this.listWidget.clearSearch();
+			}
+			await timeout(100);
+		}
+	}
+
+	public async revealInstalledCustomization(target: IInstalledCustomizationTarget): Promise<void> {
+		this.selectSection(target.section);
+		await this.listWidgetSectionLoad;
+		if (this.isPromptsSection(target.section) && target.uri) {
+			await this.revealCustomizationByUri(target.uri);
+			return;
+		}
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const revealed = target.section === AICustomizationManagementSection.Plugins && target.uri
+				? await this.pluginListWidget?.revealAndSelectItemByUri(target.uri)
+				: target.section === AICustomizationManagementSection.McpServers
+					? this.mcpListWidget?.revealAndSelectServer(target.mcpServerId, target.name)
+					: true;
+			if (revealed !== false) {
+				return;
 			}
 			await timeout(100);
 		}
